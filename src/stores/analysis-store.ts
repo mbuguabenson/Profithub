@@ -1,5 +1,5 @@
 import { action, makeObservable, observable, reaction, runInAction } from 'mobx';
-import { api_base, ApiHelpers } from '@/external/bot-skeleton';
+import { api_base } from '@/external/bot-skeleton';
 import { DigitStatsEngine } from '@/lib/digit-stats-engine';
 import { DigitTradeEngine } from '@/lib/digit-trade-engine';
 import subscriptionManager from '@/lib/subscription-manager';
@@ -100,8 +100,6 @@ export default class AnalysisStore {
             is_socket_opened => {
                 this.is_connected = !!is_socket_opened;
                 if (is_socket_opened) {
-                    const api_helpers = ApiHelpers.setInstance(this.root_store.api_helpers);
-                    api_helpers.setApi(api_base.api);
                     this.fetchMarkets();
                     if (!this.unsubscribe_ticks) {
                         this.subscribeToTicks(); // Auto-subscribe if connected and not already
@@ -148,6 +146,11 @@ export default class AnalysisStore {
         const price = Number(tick.quote);
         const new_digit = this.stats_engine.extractLastDigit(price);
         console.log(`[AnalysisStore] Extracted digit: ${new_digit} (pip: ${this.stats_engine.pip})`);
+
+        runInAction(() => {
+            if (this.is_subscribing) this.is_subscribing = false;
+            if (this.is_loading) this.is_loading = false;
+        });
 
         if (!isNaN(new_digit)) {
             const current_ticks = [...this.ticks, new_digit];
@@ -329,53 +332,37 @@ export default class AnalysisStore {
 
     @action
     fetchMarkets = async () => {
-        if (!ApiHelpers.instance) {
-            if (api_base.api) {
-                ApiHelpers.setInstance({
-                    server_time: this.root_store.common.server_time,
-                    ws: api_base.api,
-                });
-            } else {
-                return;
-            }
-        }
         try {
-            const symbols = await (
-                ApiHelpers.instance as unknown as {
-                    active_symbols: {
-                        retrieveActiveSymbols: () => Promise<
-                            Array<{
-                                is_trading_suspended: number | boolean;
-                                market_display_name?: string;
-                                market: string;
-                                symbol: string;
-                                display_name: string;
-                                pip: number;
-                            }>
-                        >;
-                    };
-                }
-            ).active_symbols.retrieveActiveSymbols();
+            if (!api_base.api) return;
+            const response = (await api_base.api.send({ active_symbols: 'brief' })) as {
+                active_symbols?: Record<string, unknown>[];
+            };
 
-            runInAction(() => {
-                if (symbols && Array.isArray(symbols)) {
-                    const groups: Record<string, { group: string; items: { value: string; label: string }[] }> = {};
-                    symbols.forEach(s => {
-                        if (s.is_trading_suspended) return;
-                        const market_name = s.market_display_name || s.market;
-                        if (!groups[market_name]) groups[market_name] = { group: market_name, items: [] };
-                        groups[market_name].items.push({ value: s.symbol, label: s.display_name });
+            if (response.active_symbols) {
+                const groups: Record<string, { group: string; items: { value: string; label: string }[] }> = {};
 
-                        const pip = Math.abs(Math.log10(s.pip)); // Convert pip to decimals
-                        this.symbol_pips.set(s.symbol, pip);
+                response.active_symbols.forEach((s: Record<string, unknown>) => {
+                    // Only show synthetic_index markets
+                    if (s.is_trading_suspended || s.market !== 'synthetic_index') return;
+
+                    const market_name = (s.market_display_name as string) || (s.market as string);
+                    if (!groups[market_name]) groups[market_name] = { group: market_name, items: [] };
+                    groups[market_name].items.push({ value: s.symbol as string, label: s.display_name as string });
+
+                    if (s.pip) {
+                        const pip = Math.abs(Math.log10(s.pip as number)); // Convert pip to decimals
+                        this.symbol_pips.set(s.symbol as string, pip);
                         if (s.symbol === this.symbol) {
                             this.pip = pip;
                             this.updateEngineConfig();
                         }
-                    });
+                    }
+                });
+
+                runInAction(() => {
                     this.markets = Object.values(groups).sort((a, b) => a.group.localeCompare(b.group));
-                }
-            });
+                });
+            }
         } catch (error) {
             console.error('Error fetching markets in AnalysisStore:', error);
         }

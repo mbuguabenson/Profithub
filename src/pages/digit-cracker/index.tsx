@@ -350,7 +350,7 @@ const DigitCracker = observer(() => {
                     </div>
                     <div className='stat-card tick-count'>
                         <span className='label'>Ticks Analyzed</span>
-                        <span className='value'>{digit_cracker.ticks.length}/100</span>
+                        <span className='value'>{digit_cracker.ticks.length}/{digit_cracker.total_ticks}</span>
                     </div>
                 </div>
             </div>

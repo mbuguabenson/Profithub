@@ -1,5 +1,4 @@
-import { action, makeObservable, observable, runInAction } from 'mobx';
-import { generateDerivApiInstance, V2GetActiveToken } from '@/external/bot-skeleton/services/api/appId';
+import { action, makeObservable, observable, reaction, runInAction } from 'mobx';
 import { DigitStatsEngine } from '@/lib/digit-stats-engine';
 import { DigitTradeEngine } from '@/lib/digit-trade-engine';
 import subscriptionManager from '@/lib/subscription-manager';
@@ -24,7 +23,7 @@ export default class DigitCrackerStore {
     root_store: RootStore;
     stats_engine: DigitStatsEngine;
     trade_engine: DigitTradeEngine;
-    api: any = null;
+    api: unknown = null;
 
     @observable accessor digit_stats: TDigitStat[] = [];
     @observable accessor ticks: number[] = [];
@@ -51,6 +50,8 @@ export default class DigitCrackerStore {
     @observable accessor markets: { group: string; items: { value: string; label: string }[] }[] = [];
     @observable accessor unsubscribe_ticks: (() => void) | null = null;
     @observable accessor pip = 2;
+    @observable accessor over_under_threshold = 5;
+    @observable accessor match_diff_digit = 6;
     private symbol_pips: Map<string, number> = new Map();
 
     constructor(root_store: RootStore) {
@@ -65,47 +66,49 @@ export default class DigitCrackerStore {
 
     @action
     initConnection = async () => {
-        if (this.api) {
-            this.api.disconnect();
-        }
+        // Subscribe to global socket connection
+        reaction(
+            () => this.root_store.common?.is_socket_opened,
+            is_socket_opened => {
+                this.is_connected = !!is_socket_opened;
+                if (is_socket_opened) {
+                    this.fetchMarkets();
+                    if (!this.unsubscribe_ticks) {
+                        this.subscribeToTicks(); // Auto-subscribe if connected
+                    }
+                } else {
+                    this.dispose(); // Clean up on disconnect
+                }
+            }
+        );
 
-        this.api = generateDerivApiInstance();
-
-        this.api.connection.addEventListener('open', () => {
-            runInAction(() => {
-                this.is_connected = true;
-            });
+        // Init immediately if already opened
+        if (this.root_store.common?.is_socket_opened) {
+            this.is_connected = true;
             this.fetchMarkets();
             this.subscribeToTicks();
-        });
-
-        this.api.connection.addEventListener('close', () => {
-            runInAction(() => {
-                this.is_connected = false;
-            });
-        });
-
-        // Handle authorization if token exists
-        const token = V2GetActiveToken();
-        if (token) {
-            try {
-                await this.api.authorize(token);
-            } catch (e) {
-                console.error('[DigitCrackerStore] Auth failed:', e);
-            }
         }
     };
 
     @action
     fetchMarkets = async () => {
         try {
-            const response = await this.api.send({ active_symbols: 'brief', product_type: 'basic' });
+            const { api_base } = await import('@/external/bot-skeleton');
+            if (!api_base.api) return;
+            const response = (await api_base.api.send({ active_symbols: 'brief' })) as {
+                active_symbols?: Record<string, unknown>[];
+            };
             if (response.active_symbols) {
-                const filtered = response.active_symbols.filter((s: any) => s.market === 'synthetic_index');
+                const filtered = response.active_symbols.filter(
+                    (s: Record<string, unknown>) => s.market === 'synthetic_index'
+                );
                 const grouped = [
                     {
                         group: 'Synthetic Indices',
-                        items: filtered.map((s: any) => ({ value: s.symbol, label: s.display_name })),
+                        items: filtered.map((s: Record<string, unknown>) => ({
+                            value: s.symbol as string,
+                            label: s.display_name as string,
+                        })),
                     },
                 ];
                 runInAction(() => {
@@ -137,8 +140,40 @@ export default class DigitCrackerStore {
     };
 
     @action
+    handleTick = (tick: Record<string, unknown>) => {
+        if (tick.symbol !== this.symbol) return;
+
+        const price = Number(tick.quote);
+        const new_digit = this.stats_engine.extractLastDigit(price);
+
+        runInAction(() => {
+            if (this.is_subscribing) this.is_subscribing = false;
+        });
+
+        if (!isNaN(new_digit)) {
+            const current_ticks = [...this.ticks, new_digit];
+            if (current_ticks.length > this.total_ticks) current_ticks.shift();
+
+            this.ticks = current_ticks;
+            this.last_digit = new_digit;
+            this.current_price = price;
+
+            this.stats_engine.updateWithHistory(this.ticks, price);
+            this.updateFromEngine();
+
+            // Push to trade engine
+            this.trade_engine.processTick(
+                new_digit,
+                { percentages: this.stats_engine.getPercentages(), digit_stats: this.stats_engine.digit_stats },
+                this.symbol,
+                this.root_store.client?.currency || 'USD'
+            );
+        }
+    };
+
+    @action
     subscribeToTicks = async () => {
-        if (!this.api || !this.is_connected) return;
+        if (!this.is_connected) return;
 
         if (this.unsubscribe_ticks) {
             this.unsubscribe_ticks();
@@ -147,15 +182,17 @@ export default class DigitCrackerStore {
         this.is_subscribing = true;
 
         try {
-            this.unsubscribe_ticks = await subscriptionManager.subscribeToTicks(this.symbol, (data: any) => {
-                if (data.msg_type === 'tick' && data.tick) {
-                    if (data.tick.symbol === this.symbol) {
-                        this.handleTick(data.tick);
+            this.unsubscribe_ticks = await subscriptionManager.subscribeToTicks(this.symbol, (data: unknown) => {
+                const typed_data = data as Record<string, unknown>;
+                if (typed_data.msg_type === 'tick' && typed_data.tick) {
+                    const tick_data = typed_data.tick as Record<string, unknown>;
+                    if (tick_data.symbol === this.symbol) {
+                        this.handleTick(tick_data);
                     }
-                } else if (data.msg_type === 'history' && (data.history || data.ticks_history)) {
+                } else if (typed_data.msg_type === 'history' && (typed_data.history || typed_data.ticks_history)) {
                     console.log(`[DigitCrackerStore] Processing history for ${this.symbol}`);
-                    const history_data = data.history || data.ticks_history;
-                    if (history_data && history_data.prices && history_data.prices.length > 0) {
+                    const history_data = (typed_data.history || typed_data.ticks_history) as Record<string, unknown>;
+                    if (history_data && history_data.prices && Array.isArray(history_data.prices)) {
                         const prices = history_data.prices;
                         runInAction(() => {
                             const price_numbers = prices.map((p: string | number) => Number(p));
@@ -166,6 +203,7 @@ export default class DigitCrackerStore {
                             const last_price = price_numbers[price_numbers.length - 1];
                             this.current_price = last_price;
                             this.ticks = last_digits;
+                            this.last_digit = this.stats_engine.extractLastDigit(last_price);
 
                             this.stats_engine.update(last_digits, price_numbers);
                             this.updateFromEngine();
@@ -199,8 +237,9 @@ export default class DigitCrackerStore {
         if (this.unsubscribe_ticks) {
             this.unsubscribe_ticks();
         }
-        if (this.api) {
-            this.api.disconnect();
+        const api_obj = this.api as Record<string, unknown>;
+        if (api_obj && typeof api_obj.disconnect === 'function') {
+            api_obj.disconnect();
         }
     };
 }

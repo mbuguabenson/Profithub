@@ -1,7 +1,12 @@
 /**
  * Centralized WebSocket Subscription Manager
- * Prevents duplicate subscriptions and manages cleanup when switching tabs
+ * Uses a dedicated raw WebSocket connection for tick subscriptions,
+ * bypassing the Deriv SDK's auth-blocking queue.
  */
+
+import { getAppId, getSocketURL } from '@/components/shared';
+import { website_name } from '@/utils/site-config';
+import { getInitialLanguage } from '@deriv-com/translations';
 
 type SubscriptionCallback = (data: unknown) => void;
 
@@ -10,149 +15,245 @@ interface ActiveSubscription {
     id: string | null;
     callbacks: Set<SubscriptionCallback>;
     unsubscribe: (() => void) | null;
+    lastHistory?: Record<string, unknown>;
+    lastTick?: Record<string, unknown>;
 }
 
 export class SubscriptionManager {
     private activeSubscriptions: Map<string, ActiveSubscription> = new Map();
-    private api: {
-        send: (data: unknown) => Promise<unknown>;
-        onMessage: () => {
-            subscribe: (callback: (data: unknown) => void) => {
-                unsubscribe: () => void;
-            };
-        };
-        connection: { readyState: number };
-    } | null = null;
+    private ws: WebSocket | null = null;
+    private reqId = 1000; // Start at 1000 to avoid clashes with main SDK req_ids
+    private connectPromise: Promise<void> | null = null;
 
-    setApi(api: any) {
-        this.api = api;
+    /**
+     * Get or create the dedicated raw WebSocket for tick subscriptions
+     */
+    private getConnection(): Promise<void> {
+        // Already connected
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            return Promise.resolve();
+        }
+
+        // Already connecting, return existing promise
+        if (this.connectPromise) {
+            return this.connectPromise;
+        }
+
+        // Build the socket URL
+        const server = (getSocketURL() || 'ws.derivws.com').replace(/[^a-zA-Z0-9.]/g, '');
+        const appId = (getAppId() || '121856').toString().replace(/[^a-zA-Z0-9]/g, '');
+        const lang = (getInitialLanguage() || 'EN').toUpperCase();
+        const brand = (website_name || 'deriv').toLowerCase();
+        const url = `wss://${server}/websockets/v3?app_id=${appId}&l=${lang}&brand=${brand}`;
+
+        this.connectPromise = new Promise<void>((resolve, reject) => {
+            try {
+                if (this.ws) {
+                    try {
+                        this.ws.close();
+                    } catch (_) {
+                        /* ignore */
+                    }
+                }
+                const ws = new WebSocket(url);
+                this.ws = ws;
+
+                const timeout = setTimeout(() => {
+                    reject(new Error('WebSocket connection timeout'));
+                    this.connectPromise = null;
+                }, 10000);
+
+                ws.onopen = () => {
+                    clearTimeout(timeout);
+                    console.log('[SubscriptionManager] Dedicated WS connected:', url);
+                    this.connectPromise = null;
+                    resolve();
+                };
+
+                ws.onmessage = (event: MessageEvent) => {
+                    try {
+                        const data = JSON.parse(event.data as string) as Record<string, unknown>;
+                        this.handleMessage(data);
+                    } catch (_) {
+                        /* ignore parse errors */
+                    }
+                };
+
+                ws.onclose = () => {
+                    console.warn('[SubscriptionManager] Dedicated WS closed');
+                    this.ws = null;
+                    this.connectPromise = null;
+                    // Clear all cached subscription IDs since the connection is gone
+                    this.activeSubscriptions.forEach(sub => {
+                        sub.id = null;
+                    });
+                };
+
+                ws.onerror = () => {
+                    clearTimeout(timeout);
+                    this.connectPromise = null;
+                    reject(new Error('WebSocket connection failed'));
+                };
+            } catch (err) {
+                this.connectPromise = null;
+                reject(err);
+            }
+        });
+
+        return this.connectPromise;
     }
 
     /**
-     * Subscribe to ticks_history for a symbol
-     * Returns unsubscribe function
+     * Handle incoming WebSocket messages and route to callbacks
+     */
+    private handleMessage(data: Record<string, unknown>) {
+        const tick_data = data.tick as Record<string, unknown> | undefined;
+        const req_data = data.echo_req as Record<string, unknown> | undefined;
+        const msg_type = data.msg_type as string | undefined;
+
+        // Determine symbol for filtering
+        const msgSymbol =
+            (tick_data?.symbol as string) || (req_data?.ticks_history as string) || (req_data?.ticks as string);
+
+        if (msg_type === 'tick' || msg_type === 'history') {
+            this.activeSubscriptions.forEach(sub => {
+                if (!msgSymbol || msgSymbol === sub.symbol) {
+                    if (msg_type === 'history') {
+                        sub.lastHistory = data;
+                    } else if (msg_type === 'tick') {
+                        sub.lastTick = data;
+                    }
+                    sub.callbacks.forEach(cb => cb(data));
+                }
+            });
+        }
+    }
+
+    /**
+     * Send a raw message over the dedicated WebSocket
+     */
+    private sendRaw(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+        return this.getConnection().then(() => {
+            return new Promise<Record<string, unknown>>((resolve, reject) => {
+                if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                    reject(new Error('WebSocket not open'));
+                    return;
+                }
+
+                const req_id = ++this.reqId;
+                const message = { ...payload, req_id };
+
+                // One-time message listener for this request's response
+                const onMessage = (event: MessageEvent) => {
+                    try {
+                        const data = JSON.parse(event.data as string) as Record<string, unknown>;
+                        if (data.req_id === req_id) {
+                            this.ws!.removeEventListener('message', onMessage);
+                            resolve(data);
+                        }
+                    } catch (_) {
+                        /* ignore */
+                    }
+                };
+
+                const onClose = () => {
+                    this.ws?.removeEventListener('message', onMessage);
+                    reject(new Error('WebSocket closed before response'));
+                };
+
+                this.ws.addEventListener('message', onMessage);
+                this.ws.addEventListener('close', onClose, { once: true });
+                this.ws.send(JSON.stringify(message));
+            });
+        });
+    }
+
+    /**
+     * Subscribe to ticks_history for a symbol.
+     * Returns unsubscribe function.
      */
     async subscribeToTicks(symbol: string, callback: SubscriptionCallback, count: number = 1000): Promise<() => void> {
         const key = `ticks_${symbol}`;
 
-        // If already subscribed, just add callback
+        // If already subscribed, just add callback and send cached data
         if (this.activeSubscriptions.has(key)) {
             const sub = this.activeSubscriptions.get(key)!;
             sub.callbacks.add(callback);
 
-            // Return unsubscribe function for this specific callback
+            // Immediately send cached data to the new callback to fix late-subscriber lockups
+            if (sub.lastHistory) {
+                try {
+                    callback(sub.lastHistory);
+                } catch (_) {
+                    /* ignore */
+                }
+            }
+            if (sub.lastTick) {
+                try {
+                    callback(sub.lastTick);
+                } catch (_) {
+                    /* ignore */
+                }
+            }
+
             return () => {
                 sub.callbacks.delete(callback);
-                // If no more callbacks, unsubscribe completely
                 if (sub.callbacks.size === 0) {
                     this.unsubscribe(key);
                 }
             };
         }
 
-        // Create new subscription
+        // Create new subscription entry
         const subscription: ActiveSubscription = {
             symbol,
             id: null,
             callbacks: new Set([callback]),
             unsubscribe: null,
         };
-
         this.activeSubscriptions.set(key, subscription);
 
         try {
-            if (!this.api) {
-                console.warn('[SubscriptionManager] API not initialized');
-                return () => this.unsubscribe(key);
-            }
+            // Send ticks_history with subscribe: 1 over raw WebSocket
+            const response = await this.sendRaw({
+                ticks_history: symbol,
+                count,
+                end: 'latest',
+                style: 'ticks',
+                subscribe: 1,
+            });
 
-            if (this.api.connection.readyState !== 1) {
-                console.warn(
-                    '[SubscriptionManager] WebSocket not in OPEN state (readyState:',
-                    this.api.connection.readyState,
-                    ')'
-                );
-                this.activeSubscriptions.delete(key);
-                throw new Error('Connection not ready. Please wait or refresh.');
-            }
-
-            // Subscribe to ticks_history
-            let response: any;
-            try {
-                response = await this.api.send({
-                    ticks_history: symbol,
-                    count,
-                    end: 'latest',
-                    style: 'ticks',
-                    subscribe: 1,
-                });
-            } catch (error: unknown) {
-                // If already subscribed error, we can safely ignore and proceed to listen
-                const err = error as { error?: { code: string }; code?: string };
-                if (err?.error?.code === 'AlreadySubscribed' || err?.code === 'AlreadySubscribed') {
-                    console.log(`[SubscriptionManager] Already subscribed to ${symbol} (ignoring error)`);
+            if (response.error) {
+                const err = response.error as Record<string, unknown>;
+                if (err.code === 'AlreadySubscribed') {
+                    console.log(`[SubscriptionManager] Already subscribed to ${symbol} (using existing)`);
                 } else {
-                    throw error;
-                }
-            }
-
-            if (response && response.error) {
-                // If already subscribed error, we can safely ignore and use existing subscription
-                if (response.error.code === 'AlreadySubscribed') {
-                    console.log(`[SubscriptionManager] Using existing subscription for ${symbol}`);
-                    // The subscription already exists on the server, so we just track it locally
-                } else {
-                    console.error('[SubscriptionManager] Subscription error:', response.error);
                     this.activeSubscriptions.delete(key);
-                    throw new Error(response.error.message);
+                    throw new Error(String(err.message || 'Subscription failed'));
                 }
             }
 
-            if (response && response.subscription) {
-                subscription.id = response.subscription.id;
+            // Store subscription ID for cleanup
+            if (response.subscription) {
+                const sub_info = response.subscription as Record<string, unknown>;
+                subscription.id = sub_info.id as string;
             }
 
-            // Immediately call callback with history/initial response
-            const res = response as any;
-            if (res && !res.error) {
-                callback(res);
+            // Dispatch initial history/tick to callback
+            if (!response.error) {
+                callback(response);
+                if (response.msg_type === 'history') {
+                    subscription.lastHistory = response;
+                }
             }
 
-            // Set up message listener
-            const messageHandler = (data: any) => {
-                const actualMsgType = data.msg_type || (data.tick ? 'tick' : data.history ? 'history' : 'unknown');
-                console.log('@@@_SUB_MGR_DATA', {
-                    symbol,
-                    actualMsgType,
-                    hasTick: !!data.tick,
-                    hasHistory: !!data.history,
-                    keys: Object.keys(data),
-                });
-
-                // Basic filtering to ensure we only process messages for this symbol
-                const msgSymbol = data.tick?.symbol || data.echo_req?.ticks_history || data.echo_req?.ticks;
-
-                if (msgSymbol && msgSymbol !== symbol) {
-                    return;
-                }
-
-                if (actualMsgType === 'tick' || actualMsgType === 'history') {
-                    const sub = this.activeSubscriptions.get(key);
-                    if (sub) {
-                        sub.callbacks.forEach(cb => cb(data));
-                    }
-                }
-            };
-
-            // Store unsubscribe function
-            subscription.unsubscribe = this.api.onMessage().subscribe(messageHandler).unsubscribe;
+            console.log(`[SubscriptionManager] Subscribed to ${symbol}, id: ${subscription.id}`);
         } catch (error) {
             console.error('[SubscriptionManager] Failed to subscribe:', error);
             this.activeSubscriptions.delete(key);
             throw error;
         }
 
-        // Return unsubscribe function
         return () => {
             const sub = this.activeSubscriptions.get(key);
             if (sub) {
@@ -171,19 +272,17 @@ export class SubscriptionManager {
         const subscription = this.activeSubscriptions.get(key);
         if (!subscription) return;
 
-        // Call unsubscribe for message handler
-        if (subscription.unsubscribe) {
-            subscription.unsubscribe();
-        }
-
         // Forget subscription on server if we have an ID
-        if (subscription.id && this.api) {
-            this.api.send({ forget: subscription.id }).catch((err: unknown) => {
-                console.warn('[SubscriptionManager] Failed to forget subscription:', err);
-            });
+        if (subscription.id && this.ws && this.ws.readyState === WebSocket.OPEN) {
+            try {
+                this.ws.send(JSON.stringify({ forget: subscription.id, req_id: ++this.reqId }));
+            } catch (_) {
+                /* ignore */
+            }
         }
 
         this.activeSubscriptions.delete(key);
+        console.log(`[SubscriptionManager] Unsubscribed from ${key}`);
     }
 
     /**
@@ -196,10 +295,18 @@ export class SubscriptionManager {
 
     /**
      * Reset manager state (useful on connection loss/reset)
-     * Clears all subscriptions without attempting to send forget requests
      */
     reset() {
         this.activeSubscriptions.clear();
+        if (this.ws) {
+            try {
+                this.ws.close();
+            } catch (_) {
+                /* ignore */
+            }
+            this.ws = null;
+        }
+        this.connectPromise = null;
     }
 
     /**
@@ -214,6 +321,15 @@ export class SubscriptionManager {
      */
     isSubscribed(symbol: string): boolean {
         return this.activeSubscriptions.has(`ticks_${symbol}`);
+    }
+
+    /**
+     * Legacy: allow setting the API (no-op now since we use raw WS)
+     * Kept for backwards compatibility
+     */
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    setApi(__api: unknown) {
+        // No-op: we no longer use the SDK API for subscriptions
     }
 }
 

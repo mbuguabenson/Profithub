@@ -1,7 +1,7 @@
 import { action, makeObservable, observable, reaction, runInAction } from 'mobx';
+import { getAppId } from '@/components/shared';
 import { ProposalOpenContract } from '@deriv/api-types';
 import RootStore from './root-store';
-import { getAppId } from '@/components/shared';
 
 export type TCopyAccount = {
     token: string;
@@ -214,7 +214,13 @@ export default class CopyTraderStore {
             if (target.status === 'Connected' && target.ws) {
                 const multiplier = this.is_mirroring_internal ? this.internal_multiplier : 1;
                 const original_stake =
-                    parseFloat(String(contract.buy_price || (contract as any).stake || (contract as any).amount)) || 1;
+                    parseFloat(
+                        String(
+                            contract.buy_price ||
+                                (contract as Record<string, unknown>).stake ||
+                                (contract as Record<string, unknown>).amount
+                        )
+                    ) || 1;
                 const stake = original_stake * multiplier;
 
                 try {
@@ -234,9 +240,9 @@ export default class CopyTraderStore {
                     target.ws!.send(JSON.stringify(proposal_request));
 
                     // Wait for proposal response
-                    const proposal_response = await new Promise<any>((resolve, reject) => {
+                    const proposal_response = (await new Promise((resolve, reject) => {
                         const handler = (event: MessageEvent) => {
-                            const data = JSON.parse(event.data);
+                            const data = JSON.parse(event.data) as Record<string, unknown>;
                             if (data.msg_type === 'proposal') {
                                 target.ws!.removeEventListener('message', handler);
                                 resolve(data);
@@ -247,24 +253,26 @@ export default class CopyTraderStore {
                         };
                         target.ws!.addEventListener('message', handler);
                         setTimeout(() => reject(new Error('Proposal timeout')), 5000);
-                    });
+                    })) as Record<string, unknown>;
 
                     if (proposal_response.error) {
-                        console.error('CopyTrader Proposal Error:', proposal_response.error);
+                        const err_obj = proposal_response.error as Record<string, unknown>;
+                        console.error('CopyTrader Proposal Error:', err_obj);
                         runInAction(() => {
                             this.trade_history.unshift({
                                 timestamp: Date.now(),
                                 market: String(contract.underlying),
                                 stake: stake,
                                 status: 'Failed',
-                                message: 'Proposal Error: ' + proposal_response.error.message,
+                                message: 'Proposal Error: ' + String(err_obj.message),
                                 target_label: target.label || 'Target',
                             });
                         });
                         return;
                     }
 
-                    const proposal_id = proposal_response.proposal?.id;
+                    const proposal = proposal_response.proposal as Record<string, unknown> | undefined;
+                    const proposal_id = proposal?.id as string | number | undefined;
                     if (!proposal_id) {
                         return;
                     }
@@ -293,7 +301,8 @@ export default class CopyTraderStore {
                     console.log(
                         `Sent mirror buy request to target account ${target.token.substring(0, 5)} with stake ${stake}...`
                     );
-                } catch (error: any) {
+                } catch (error: unknown) {
+                    const err = error as Error | { message?: string };
                     console.error('CopyTrader mirror error:', error);
                     runInAction(() => {
                         this.trade_history.unshift({
@@ -301,7 +310,7 @@ export default class CopyTraderStore {
                             market: String(contract.underlying),
                             stake: stake,
                             status: 'Failed',
-                            message: error.message || 'Unknown Error',
+                            message: 'message' in err && err.message ? err.message : 'Unknown Error',
                             target_label: target.label || 'Target',
                         });
                     });
@@ -440,7 +449,13 @@ export default class CopyTraderStore {
 
         const { client } = this.root_store;
         const original_stake =
-            parseFloat(String(contract.buy_price || (contract as any).stake || (contract as any).amount)) || 1;
+            parseFloat(
+                String(
+                    contract.buy_price ||
+                        (contract as Record<string, unknown>).stake ||
+                        (contract as Record<string, unknown>).amount
+                )
+            ) || 1;
         const stake = original_stake * this.internal_multiplier;
 
         try {
@@ -463,9 +478,9 @@ export default class CopyTraderStore {
             this.real_account_ws.send(JSON.stringify(proposal_request));
 
             // Wait for proposal response
-            const proposal_response = await new Promise<any>((resolve, reject) => {
+            const proposal_response = (await new Promise((resolve, reject) => {
                 const handler = (event: MessageEvent) => {
-                    const data = JSON.parse(event.data);
+                    const data = JSON.parse(event.data) as Record<string, unknown>;
                     if (data.msg_type === 'proposal') {
                         this.real_account_ws!.removeEventListener('message', handler);
                         resolve(data);
@@ -476,24 +491,26 @@ export default class CopyTraderStore {
                 };
                 this.real_account_ws!.addEventListener('message', handler);
                 setTimeout(() => reject(new Error('Proposal timeout')), 5000);
-            });
+            })) as Record<string, unknown>;
 
             if (proposal_response.error) {
-                console.error('Demo to Real Proposal Error:', proposal_response.error);
+                const err_obj = proposal_response.error as Record<string, unknown>;
+                console.error('Demo to Real Proposal Error:', err_obj);
                 runInAction(() => {
                     this.trade_history.unshift({
                         timestamp: Date.now(),
                         market: String(contract.underlying),
                         stake: stake,
                         status: 'Failed',
-                        message: 'Proposal Error: ' + proposal_response.error.message,
+                        message: 'Proposal Error: ' + String(err_obj.message),
                         target_label: 'Real Account',
                     });
                 });
                 return;
             }
 
-            const proposal_id = proposal_response.proposal?.id;
+            const proposal = proposal_response.proposal as Record<string, unknown> | undefined;
+            const proposal_id = proposal?.id as string | number | undefined;
             if (!proposal_id) return;
 
             // Step 2: Buy the contract on real account
@@ -517,7 +534,8 @@ export default class CopyTraderStore {
             });
 
             console.log(`Copied trade to real account with stake ${stake}`);
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const err = error as Error | { message?: string };
             console.error('Demo to Real mirror error:', error);
             runInAction(() => {
                 this.trade_history.unshift({
@@ -525,7 +543,7 @@ export default class CopyTraderStore {
                     market: String(contract.underlying),
                     stake: stake,
                     status: 'Failed',
-                    message: error.message || 'Unknown Error',
+                    message: 'message' in err && err.message ? err.message : 'Unknown Error',
                     target_label: 'Real Account',
                 });
             });

@@ -573,7 +573,7 @@ export default class SmartTradingStore {
         runInAction(() => {
             if (price !== undefined) {
                 this.analysis_engine.addTick(Number(price));
-                this.root_store.analysis.updateDigitStats(last_digits, price);
+                this.root_store.analysis.updateDigitStats(last_digits, [price]);
                 this.root_store.auto_trader.updateDigitStats(last_digits, price);
             }
 
@@ -765,7 +765,7 @@ export default class SmartTradingStore {
         if (!this.symbol || !this.is_connected) return;
 
         try {
-            this.unsubscribeTicks = await subscriptionManager.subscribeToTicks(this.symbol, data => {
+            this.unsubscribeTicks = await subscriptionManager.subscribeToTicks(this.symbol, (data: any) => {
                 if (data.msg_type === 'tick') {
                     const quote = data.tick.quote;
                     // Construct single-item array or just pass quote if updateDigitStats handles parsing
@@ -791,7 +791,7 @@ export default class SmartTradingStore {
                         const s = String(p);
                         return parseInt(s[s.length - 1]);
                     });
-                    this.updateDigitStats(digits, prices[prices.length - 1]);
+                    this.updateDigitStats(digits, prices);
                 }
             });
         } catch (error) {
