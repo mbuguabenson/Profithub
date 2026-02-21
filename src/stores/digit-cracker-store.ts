@@ -2,6 +2,7 @@ import { action, makeObservable, observable, runInAction } from 'mobx';
 import { generateDerivApiInstance, V2GetActiveToken } from '@/external/bot-skeleton/services/api/appId';
 import { DigitStatsEngine } from '@/lib/digit-stats-engine';
 import { DigitTradeEngine } from '@/lib/digit-trade-engine';
+import subscriptionManager from '@/lib/subscription-manager';
 import RootStore from './root-store';
 
 export type TDigitStat = {
@@ -57,6 +58,7 @@ export default class DigitCrackerStore {
         this.root_store = root_store;
         this.stats_engine = new DigitStatsEngine();
         this.trade_engine = new DigitTradeEngine();
+        this.updateFromEngine();
 
         this.initConnection();
     }
@@ -145,65 +147,36 @@ export default class DigitCrackerStore {
         this.is_subscribing = true;
 
         try {
-            // Get history first
-            const history = await this.api.send({
-                ticks_history: this.symbol,
-                count: 1000,
-                end: 'latest',
-                style: 'ticks',
-            });
+            this.unsubscribe_ticks = await subscriptionManager.subscribeToTicks(this.symbol, (data: any) => {
+                if (data.msg_type === 'tick' && data.tick) {
+                    if (data.tick.symbol === this.symbol) {
+                        this.handleTick(data.tick);
+                    }
+                } else if (data.msg_type === 'history' && (data.history || data.ticks_history)) {
+                    console.log(`[DigitCrackerStore] Processing history for ${this.symbol}`);
+                    const history_data = data.history || data.ticks_history;
+                    if (history_data && history_data.prices && history_data.prices.length > 0) {
+                        const prices = history_data.prices;
+                        runInAction(() => {
+                            const price_numbers = prices.map((p: string | number) => Number(p));
+                            const last_digits = prices.map((p: number | string) => {
+                                return this.stats_engine.extractLastDigit(p);
+                            });
 
-            if (history.history && history.history.prices) {
-                const prices = history.history.prices;
-                runInAction(() => {
-                    const price_numbers = prices.map((p: string | number) => Number(p));
-                    const last_digits = prices.map((p: number | string) => {
-                        return this.stats_engine.extractLastDigit(p);
-                    });
+                            const last_price = price_numbers[price_numbers.length - 1];
+                            this.current_price = last_price;
+                            this.ticks = last_digits;
 
-                    const last_price = price_numbers[price_numbers.length - 1];
-                    this.current_price = last_price;
-                    this.ticks = last_digits;
-
-                    this.stats_engine.update(last_digits, price_numbers);
-                    this.updateFromEngine();
-                });
-            }
-
-            // Subscribe
-            const sub = this.api.subscribe({
-                ticks: this.symbol,
-                subscribe: 1,
-            });
-
-            const subscription = sub.subscribe((data: any) => {
-                if (data.tick) {
-                    runInAction(() => {
-                        const price = Number(data.tick.quote);
-                        const new_digit = this.stats_engine.extractLastDigit(price);
-
-                        if (!isNaN(new_digit)) {
-                            const current_ticks = [...this.ticks, new_digit];
-                            if (current_ticks.length > this.total_ticks) current_ticks.shift();
-
-                            this.ticks = current_ticks;
-                            this.last_digit = new_digit;
-                            this.current_price = price;
-
-                            this.stats_engine.updateWithHistory(this.ticks, price);
+                            this.stats_engine.update(last_digits, price_numbers);
                             this.updateFromEngine();
-                        }
-                    });
+                            this.is_subscribing = false; // Mark as done after history
+                        });
+                    }
                 }
             });
 
-            this.unsubscribe_ticks = () => {
-                subscription.unsubscribe();
-                this.api.send({ forget_all: 'ticks' });
-            };
-
             runInAction(() => {
-                this.is_subscribing = false;
+                this.is_connected = true;
             });
         } catch (e) {
             console.error('[DigitCrackerStore] Subscription failed:', e);

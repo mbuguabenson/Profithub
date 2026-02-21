@@ -208,7 +208,17 @@ class APIBase {
 
     async authorizeAndSubscribe() {
         const token = V2GetActiveToken();
-        if (!token || !this.api) return;
+        if (!this.api) return;
+
+        if (!token) {
+            console.log('[API] No token found, proceeding anonymously');
+            if (!this.has_active_symbols) {
+                this.active_symbols_promise = this.getActiveSymbols();
+            }
+            this.subscribe();
+            return;
+        }
+
         this.token = token;
         this.account_id = V2GetActiveClientId() ?? '';
 

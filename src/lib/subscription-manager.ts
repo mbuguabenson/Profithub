@@ -12,14 +12,14 @@ interface ActiveSubscription {
     unsubscribe: (() => void) | null;
 }
 
-class SubscriptionManager {
+export class SubscriptionManager {
     private activeSubscriptions: Map<string, ActiveSubscription> = new Map();
-    private api: { 
-        send: (data: unknown) => Promise<unknown>; 
-        onMessage: () => { 
-            subscribe: (callback: (data: unknown) => void) => { 
-                unsubscribe: () => void; 
-            } 
+    private api: {
+        send: (data: unknown) => Promise<unknown>;
+        onMessage: () => {
+            subscribe: (callback: (data: unknown) => void) => {
+                unsubscribe: () => void;
+            };
         };
         connection: { readyState: number };
     } | null = null;
@@ -67,13 +67,17 @@ class SubscriptionManager {
             }
 
             if (this.api.connection.readyState !== 1) {
-                console.warn('[SubscriptionManager] WebSocket not in OPEN state (readyState:', this.api.connection.readyState, ')');
+                console.warn(
+                    '[SubscriptionManager] WebSocket not in OPEN state (readyState:',
+                    this.api.connection.readyState,
+                    ')'
+                );
                 this.activeSubscriptions.delete(key);
                 throw new Error('Connection not ready. Please wait or refresh.');
             }
 
             // Subscribe to ticks_history
-            let response;
+            let response: any;
             try {
                 response = await this.api.send({
                     ticks_history: symbol,
@@ -104,17 +108,35 @@ class SubscriptionManager {
                 }
             }
 
-            if (response.subscription) {
+            if (response && response.subscription) {
                 subscription.id = response.subscription.id;
+            }
+
+            // Immediately call callback with history/initial response
+            const res = response as any;
+            if (res && !res.error) {
+                callback(res);
             }
 
             // Set up message listener
             const messageHandler = (data: any) => {
-                // Basic filtering to ensure we only process messages for this symbol
-                const msgSymbol = data.tick?.symbol || data.echo_req?.ticks_history;
-                if (msgSymbol && msgSymbol !== symbol) return;
+                const actualMsgType = data.msg_type || (data.tick ? 'tick' : data.history ? 'history' : 'unknown');
+                console.log('@@@_SUB_MGR_DATA', {
+                    symbol,
+                    actualMsgType,
+                    hasTick: !!data.tick,
+                    hasHistory: !!data.history,
+                    keys: Object.keys(data),
+                });
 
-                if (data.msg_type === 'tick' || data.msg_type === 'history') {
+                // Basic filtering to ensure we only process messages for this symbol
+                const msgSymbol = data.tick?.symbol || data.echo_req?.ticks_history || data.echo_req?.ticks;
+
+                if (msgSymbol && msgSymbol !== symbol) {
+                    return;
+                }
+
+                if (actualMsgType === 'tick' || actualMsgType === 'history') {
                     const sub = this.activeSubscriptions.get(key);
                     if (sub) {
                         sub.callbacks.forEach(cb => cb(data));

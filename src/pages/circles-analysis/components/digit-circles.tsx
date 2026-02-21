@@ -11,43 +11,51 @@ const DigitCircles = observer(() => {
     const renderDigitGroup = (digits: typeof digit_stats) => {
         return digits.map(stat => {
             const isCurrent = stat.digit === last_digit;
-            const dashArray = 140; // Match DigitCracker
-            const dashOffset = dashArray - (dashArray * stat.percentage) / 100;
             
-            let strokeColor = '#6b7280';
-            if (stat.rank === 1) strokeColor = '#00ff41';
-            else if (stat.rank === 2) strokeColor = '#ffd700';
-            else if (stat.rank === 10) strokeColor = '#ff073a';
+            // Colors based on rank and current status
+            let color = '#3b82f6'; // Default Blue
+            if (stat.rank === 1) color = '#00ff41'; // Green for top
+            else if (stat.rank === 10) color = '#ff073a'; // Red for least
             
-            const finalColor = isCurrent ? '#ff9f00' : strokeColor;
+            if (isCurrent) color = '#ff9f00'; // Orange for NOW
 
             return (
-                <div key={stat.digit} className={`digit-circle-card digit-${stat.digit} ${isCurrent ? 'active' : ''}`} data-rank={stat.rank}>
-                    {isCurrent && <div className='live-indicator'>LIVE</div>}
-                    <div className='circle-svg-wrapper' style={{ borderColor: finalColor, boxShadow: `0 0 12px ${finalColor}40` }}>
-                        <svg width='50' height='50' viewBox='0 0 50 50'>
-                            <circle className='bg-circle' cx='25' cy='25' r='22' />
+                <div key={stat.digit} className={`digit-card-v2 ${isCurrent ? 'is-now' : ''}`} data-rank={stat.rank}>
+                    {isCurrent && (
+                        <div className='now-badge-wrapper'>
+                            <span className='now-badge'>NOW</span>
+                        </div>
+                    )}
+                    <div className='digit-main-circle'>
+                        <svg width='70' height='70' viewBox='0 0 70 70'>
+                            <circle 
+                                className='circle-track' 
+                                cx='35' cy='35' r='30' 
+                                fill='none' 
+                                stroke='rgba(255, 255, 255, 0.05)' 
+                                strokeWidth='6'
+                            />
                             <circle
-                                className='progress-circle'
-                                cx='25'
-                                cy='25'
-                                r='22'
-                                style={{ stroke: finalColor }}
-                                strokeDasharray={dashArray}
-                                strokeDashoffset={dashOffset}
+                                className='circle-progress-arc'
+                                cx='35'
+                                cy='35'
+                                r='30'
+                                fill='none'
+                                stroke={color}
+                                strokeWidth='6'
+                                strokeLinecap='round'
+                                strokeDasharray={`${(2 * Math.PI * 30) / 4} ${2 * Math.PI * 30}`}
+                                strokeDashoffset={-(2 * Math.PI * 30) * 0.375}
+                                style={{ filter: isCurrent ? `drop-shadow(0 0 8px ${color})` : 'none' }}
                             />
                         </svg>
-                        <span className='digit-text' style={{ color: finalColor, textShadow: `0 0 12px ${finalColor}` }}>{stat.digit}</span>
-                    </div>
-                    <div className='digit-info'>
-                        <div className='percentage-text'>{stat.percentage.toFixed(1)}%</div>
-                        <div className='power-bar-wrapper'>
-                            <div 
-                                className={`power-bar ${stat.is_increasing ? 'increasing' : 'decreasing'}`} 
-                                style={{ width: `${stat.power}%`, backgroundColor: finalColor, boxShadow: `0 0 6px ${finalColor}` }} 
-                            />
+                        <div className='digit-center-text'>
+                            <span className='digit-num' style={{ color: isCurrent ? color : '#fff' }}>{stat.digit}</span>
+                            <span className='digit-pct' style={{ color: isCurrent ? color : '#60a5fa' }}>{stat.percentage.toFixed(1)}%</span>
                         </div>
-                        <div className='rank-text'>#{stat.rank}</div>
+                    </div>
+                    <div className='digit-sample-size'>
+                        n={stat.count}
                     </div>
                 </div>
             );

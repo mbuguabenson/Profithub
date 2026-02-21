@@ -100,6 +100,8 @@ export default class AnalysisStore {
             is_socket_opened => {
                 this.is_connected = !!is_socket_opened;
                 if (is_socket_opened) {
+                    const api_helpers = ApiHelpers.setInstance(this.root_store.api_helpers);
+                    api_helpers.setApi(api_base.api);
                     this.fetchMarkets();
                     if (!this.unsubscribe_ticks) {
                         this.subscribeToTicks(); // Auto-subscribe if connected and not already
@@ -137,10 +139,15 @@ export default class AnalysisStore {
 
     @action
     handleTick = (tick: TTick) => {
-        if (tick.symbol !== this.symbol) return;
+        console.log(`[AnalysisStore] Received tick for ${tick.symbol}: ${tick.quote}`);
+        if (tick.symbol !== this.symbol) {
+            console.warn(`[AnalysisStore] Symbol mismatch: ${tick.symbol} !== ${this.symbol}`);
+            return;
+        }
 
         const price = Number(tick.quote);
         const new_digit = this.stats_engine.extractLastDigit(price);
+        console.log(`[AnalysisStore] Extracted digit: ${new_digit} (pip: ${this.stats_engine.pip})`);
 
         if (!isNaN(new_digit)) {
             const current_ticks = [...this.ticks, new_digit];
@@ -167,7 +174,7 @@ export default class AnalysisStore {
     @action
     updateDigitStats = (digits: number[], quotes: (string | number)[]) => {
         this.ticks = digits;
-        const prices = quotes.map(q => Number(q));
+        const prices = (quotes || []).map(q => Number(q));
         const last_price = prices[prices.length - 1] || 0;
         this.current_price = last_price;
         const last_digit = digits[digits.length - 1];
@@ -202,42 +209,37 @@ export default class AnalysisStore {
 
             console.log(`[AnalysisStore] Subscribing to ${this.symbol} (attempt ${retry_count + 1})`);
 
-            this.unsubscribe_ticks = await subscriptionManager.subscribeToTicks(
-                this.symbol,
-                action((data: unknown) => {
-                    const response = data as TDerivResponse;
-                    if (response.msg_type === 'tick' && response.tick) {
-                        if (response.tick.symbol === this.symbol) {
-                            this.handleTick(response.tick);
-                            runInAction(() => {
-                                this.is_loading = false;
-                                this.error_message = null;
-                            });
-                        }
-                    } else if (response.msg_type === 'history' && response.history) {
-                        const prices = response.history.prices;
-                        if (prices && prices.length > 0) {
-                            runInAction(() => {
-                                const price_numbers = prices.map((p: string | number) => Number(p));
-                                const last_digits = prices.map((p: number | string) => {
-                                    return this.stats_engine.extractLastDigit(p);
-                                });
-
-                                const last_price = price_numbers[price_numbers.length - 1];
-                                this.current_price = last_price;
-                                this.ticks = last_digits;
-                                this.last_digit = this.stats_engine.extractLastDigit(last_price);
-
-                                // Hydrate engine
-                                this.stats_engine.update(last_digits, price_numbers);
-                                this.refreshStats();
-                                this.is_loading = false;
-                                this.error_message = null;
-                            });
-                        }
+            this.unsubscribe_ticks = await subscriptionManager.subscribeToTicks(this.symbol, (data: unknown) => {
+                const response = data as TDerivResponse;
+                if (response.msg_type === 'tick' && response.tick) {
+                    if (response.tick.symbol === this.symbol) {
+                        this.handleTick(response.tick);
                     }
-                })
-            );
+                } else if (response.msg_type === 'history' && (response.history || response.ticks_history)) {
+                    console.log(`[AnalysisStore] Processing history for ${this.symbol}`);
+                    const history = response.history || response.ticks_history;
+                    if (history && history.prices && history.prices.length > 0) {
+                        const prices = history.prices;
+                        runInAction(() => {
+                            const price_numbers = prices.map((p: string | number) => Number(p));
+                            const last_digits = prices.map((p: number | string) => {
+                                return this.stats_engine.extractLastDigit(p);
+                            });
+
+                            const last_price = price_numbers[price_numbers.length - 1];
+                            this.current_price = last_price;
+                            this.ticks = last_digits;
+                            this.last_digit = this.stats_engine.extractLastDigit(last_price);
+
+                            // Hydrate engine
+                            this.stats_engine.update(last_digits, price_numbers);
+                            this.refreshStats();
+                            this.is_loading = false;
+                            this.error_message = null;
+                        });
+                    }
+                }
+            });
 
             console.log('[AnalysisStore] Subscription successful');
         } catch (e: unknown) {
