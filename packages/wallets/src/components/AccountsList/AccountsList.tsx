@@ -27,9 +27,6 @@ const AccountsList: FC<TProps> = ({ accountsActiveTabIndex, onTabClickHandler })
         return (
             <div className='wallets-accounts-list' data-testid='dt_desktop_accounts_list'>
                 <div className='wallets-accounts-list__content'>
-                    <Divider color='var(--border-divider)' height={2} />
-                    <CFDPlatformsList />
-                    <Divider color='var(--border-divider)' height={2} />
                     <OptionsAndMultipliersListing />
                 </div>
             </div>
@@ -44,21 +41,10 @@ const AccountsList: FC<TProps> = ({ accountsActiveTabIndex, onTabClickHandler })
     }
 
     return (
-        <Tabs
-            activeTab={tabs[accountsActiveTabIndex ?? 0]}
-            className='wallets-accounts-list__tabs'
-            onChange={onChangeTabHandler}
-            wrapperClassName='wallets-accounts-list'
-        >
-            <Tab className='wallets-accounts-list__tab' title={localize('CFDs')}>
-                <CFDPlatformsList />
-                <Divider className='wallets-accounts-list__divider' color='var(--wallets-banner-border-color)' />
-            </Tab>
-            <Tab className='wallets-accounts-list__tab' title={optionsAndMultipliersTabTitle}>
-                <OptionsAndMultipliersListing />
-                <Divider className='wallets-accounts-list__divider' color='var(--wallets-banner-border-color)' />
-            </Tab>
-        </Tabs>
+        <div className='wallets-accounts-list__tabs'>
+            <OptionsAndMultipliersListing />
+            <Divider className='wallets-accounts-list__divider' color='var(--wallets-banner-border-color)' />
+        </div>
     );
 };
 

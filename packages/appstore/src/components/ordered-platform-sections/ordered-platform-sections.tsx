@@ -26,7 +26,7 @@ const GetOrderedPlatformSections = observer(
                 })}
             >
                 {is_options_and_multipliers_visible && <OptionsAndMultipliersListingLoggedOut />}
-                {is_cfd_visible && <CFDsListingLoggedOut />}
+                {false && <CFDsListingLoggedOut />}
             </div>
         );
     }

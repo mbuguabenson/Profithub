@@ -98,7 +98,7 @@ const AppContent: React.FC<{ passthrough: unknown }> = observer(({ passthrough }
     useIntercom(token);
 
     React.useEffect(() => {
-        if (isChangingToHubAppId && !is_app_id_set) {
+        if (isChangingToHubAppId && !is_app_id_set && !/localhost/i.test(window.location.hostname)) {
             const app_id = process.env.NODE_ENV === 'production' ? 61554 : 53503;
             localStorage.setItem('change_login_app_id', app_id.toString());
             return;

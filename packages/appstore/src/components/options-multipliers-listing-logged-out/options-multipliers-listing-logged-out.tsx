@@ -15,7 +15,10 @@ const OptionsAndMultipliersListingLoggedOut = observer(() => {
     const { is_eu_user } = traders_hub;
 
     const logged_out_available_platforms = useMemo(() => {
-        const available_platforms = getAppstorePlatforms();
+        const available_platforms = getAppstorePlatforms().filter(
+            (platform: BrandConfig) =>
+                platform.name !== 'Deriv GO' && platform.name !== 'SmartTrader' && platform.name !== 'Deriv Trader'
+        );
         return isEuCountry(clients_country)
             ? available_platforms.filter((platform: BrandConfig) =>
                   ['EU', 'All'].some(region => region === platform.availability)

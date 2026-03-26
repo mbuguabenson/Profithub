@@ -106,7 +106,8 @@ const TradersHub = observer(() => {
     if (is_single_logging_in) return <Loading is_fullscreen />;
     const is_cfd_accounts_supported =
         combined_cfd_mt5_accounts.length || available_dxtrade_accounts.length || available_ctrader_accounts.length;
-    const should_show_cfd_section = !!(is_mt5_allowed && is_cfd_accounts_supported);
+    // hide CFDs as requested without deleting the code
+    const should_show_cfd_section = false; // !!(is_mt5_allowed && is_cfd_accounts_supported);
 
     const getOrderedPlatformSections = () => {
         if (should_show_cfd_section) {

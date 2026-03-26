@@ -35,7 +35,7 @@ export const getOptionsAndMultipliersContent = (
     localize: ReturnType<typeof useTranslations>['localize'],
     isEU?: boolean
 ): TOptionsAndMultipliersContent[] => [
-    {
+    /* {
         availability: 'All',
         description: isEU
             ? localize('Custom charts, low-entry costs.')
@@ -43,7 +43,7 @@ export const getOptionsAndMultipliersContent = (
         key: 'trader',
         redirect: '/dtrader',
         title: 'Deriv Trader',
-    },
+    }, */
     {
         availability: 'Non-EU',
         description: localize('The ultimate bot trading platform.'),
@@ -52,7 +52,7 @@ export const getOptionsAndMultipliersContent = (
         redirect: appendSearchParamsToUrl(getUrlBot()),
         title: 'Deriv Bot',
     },
-    {
+    /* {
         availability: 'Non-EU',
         description: localize('The legacy options trading platform.'),
         isExternal: true,
@@ -67,7 +67,7 @@ export const getOptionsAndMultipliersContent = (
         key: 'derivgo',
         redirect: getStaticUrl('/deriv-go'),
         title: 'Deriv GO',
-    },
+    }, */
 ];
 
 export const ACCOUNT_VERIFICATION_STATUSES = {

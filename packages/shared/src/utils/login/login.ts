@@ -1,3 +1,4 @@
+import Cookies from 'js-cookie';
 import { website_name } from '../config/app-config';
 import { domain_app_ids, getAppId } from '../config/config';
 import { CookieStorage, isStorageSupported, LocalStore } from '../storage/storage';
@@ -41,8 +42,22 @@ export const loginUrl = ({ language }: TLoginUrl) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const date_first_contact_cookie = new (CookieStorage as any)('date_first_contact');
     const date_first_contact = date_first_contact_cookie.get('date_first_contact');
+
+    let affiliate_token = '';
+    let utm_campaign = '';
+    try {
+        const affiliate_tracking = JSON.parse(Cookies.get('affiliate_tracking') || '{}');
+        affiliate_token = affiliate_tracking?.t || '';
+        const utm_data = JSON.parse(Cookies.get('utm_data') || '{}');
+        utm_campaign = utm_data?.utm_campaign || '';
+    } catch (e) {
+        // fail silently
+    }
+
     const marketing_queries = `${signup_device ? `&signup_device=${signup_device}` : ''}${
         date_first_contact ? `&date_first_contact=${date_first_contact}` : ''
+    }${affiliate_token ? `&affiliate_token=${affiliate_token}` : ''}${
+        utm_campaign ? `&utm_campaign=${utm_campaign}` : ''
     }`;
 
     const getOAuthUrl = () => {

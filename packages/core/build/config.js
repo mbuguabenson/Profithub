@@ -54,6 +54,7 @@ const copyConfig = base => {
         {
             from: path.resolve(__dirname, '../../../node_modules/@deriv/cashier/dist/cashier/public'),
             to: 'cashier/public',
+            noErrorOnMissing: true,
         },
         {
             from: path.resolve(__dirname, '../../../node_modules/@deriv/trader/dist/trader'),
@@ -78,6 +79,7 @@ const copyConfig = base => {
         {
             from: path.resolve(__dirname, '../../../node_modules/@deriv/wallets/dist/wallets'),
             to: 'wallets',
+            noErrorOnMissing: true,
         },
         { from: path.resolve(__dirname, '../scripts/CNAME'), to: 'CNAME', toType: 'file', noErrorOnMissing: true },
         {

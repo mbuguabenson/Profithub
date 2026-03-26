@@ -15,15 +15,15 @@ export const livechat_client_id = '66aa088aad5a414484c1fd1fa8a5ace7';
 
 export const domain_app_ids = {
     // these domains as supported "production domains"
-    'deriv.app': 16929, // TODO: [app-link-refactor] - Remove backwards compatibility for `deriv.app`
-    'app.deriv.com': 16929,
-    'staging-app.deriv.com': 16303,
-    'app.deriv.me': 1411,
-    'staging-app.deriv.me': 1411, // TODO: setup staging for deriv.me
-    'app.deriv.be': 30767,
-    'staging-app.deriv.be': 31186,
-    'binary.com': 1,
-    'test-app.deriv.com': 51072,
+    'deriv.app': 113536, // TODO: [app-link-refactor] - Remove backwards compatibility for `deriv.app`
+    'app.deriv.com': 113536,
+    'staging-app.deriv.com': 113536,
+    'app.deriv.me': 113536,
+    'staging-app.deriv.me': 113536, // TODO: setup staging for deriv.me
+    'app.deriv.be': 113536,
+    'staging-app.deriv.be': 113536,
+    'binary.com': 113536,
+    'test-app.deriv.com': 113536,
 };
 
 export const platform_app_ids = {
@@ -66,12 +66,12 @@ export const getAppId = () => {
         app_id = user_app_id;
     } else if (isStaging()) {
         window.localStorage.removeItem('config.default_app_id');
-        app_id = is_bot ? 19112 : domain_app_ids[current_domain as keyof typeof domain_app_ids] || 16303; // it's being used in endpoint chrome extension - please do not remove
+        app_id = is_bot ? 113536 : domain_app_ids[current_domain as keyof typeof domain_app_ids] || 113536; // it's being used in endpoint chrome extension - please do not remove
     } else if (/localhost/i.test(window.location.hostname)) {
         app_id = 36300;
     } else {
         window.localStorage.removeItem('config.default_app_id');
-        app_id = is_bot ? 19111 : domain_app_ids[current_domain as keyof typeof domain_app_ids] || 16929;
+        app_id = is_bot ? 113536 : domain_app_ids[current_domain as keyof typeof domain_app_ids] || 113536;
     }
 
     return app_id;
